@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -376,9 +377,11 @@ func TestSpanSettersComplete(t *testing.T) {
 	tr, ctx := c.NewTrace(context.Background(), "op")
 	span, _ := tr.NewSpan(ctx, "s", SpanTypeOther)
 	span.SetInput("prompt")
+	span.SetModel("gpt-test-direct")
 	span.SetMetadata(map[string]interface{}{"k": "v"})
 	assert.NotEmpty(t, span.ID())
 	assert.Equal(t, "prompt", span.data.Input)
+	assert.Equal(t, "gpt-test-direct", span.data.Model)
 	assert.Equal(t, "v", span.data.Metadata["k"])
 }
 
@@ -450,4 +453,191 @@ func TestEndIsIdempotent(t *testing.T) {
 	tr.End(ctx)
 	tr.End(ctx)
 	assert.Len(t, tr.data.Spans, 1)
+}
+
+// --- gaps added by QA audit (TRU-457) ---
+
+func TestDropAfterMaxRetries(t *testing.T) {
+	// All three attempts return 500 — the sender must give up after maxRetries
+	// calls and not panic or block.
+	var calls atomic.Int64
+	httpc := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) *http.Response {
+			calls.Add(1)
+			return &http.Response{
+				StatusCode: 500,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{}`))),
+				Header:     make(http.Header),
+			}
+		}),
+	}
+	c := NewClient("tl_test",
+		WithBaseURL("https://example.invalid"),
+		WithFlushInterval(time.Hour),
+		WithHTTPClient(httpc),
+	)
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	ctx := context.Background()
+	tr, _ := c.NewTrace(ctx, "t")
+	tr.End(ctx)
+	require.NoError(t, c.Flush(ctx))
+	assert.Equal(t, int64(maxRetries), calls.Load(), "must attempt exactly maxRetries times then drop")
+}
+
+func Test429IsRetried(t *testing.T) {
+	// 429 is in the 4xx range but is retryable; unlike 400 it must not short-circuit.
+	var calls atomic.Int64
+	httpc := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) *http.Response {
+			n := calls.Add(1)
+			status := 429
+			if n >= 2 {
+				status = 201
+			}
+			return &http.Response{
+				StatusCode: status,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{}`))),
+				Header:     make(http.Header),
+			}
+		}),
+	}
+	c := NewClient("tl_test",
+		WithBaseURL("https://example.invalid"),
+		WithFlushInterval(time.Hour),
+		WithHTTPClient(httpc),
+	)
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	ctx := context.Background()
+	tr, _ := c.NewTrace(ctx, "t")
+	tr.End(ctx)
+	require.NoError(t, c.Flush(ctx))
+	assert.GreaterOrEqual(t, calls.Load(), int64(2), "429 must be retried")
+}
+
+func TestTransportErrorIsRetried(t *testing.T) {
+	// A transport-level error (not an HTTP status) must trigger the retry loop
+	// and eventually drop after maxRetries. The call must not panic or block.
+	var calls atomic.Int64
+	httpc := &http.Client{
+		Transport: &errorTransport{calls: &calls},
+	}
+	c := NewClient("tl_test",
+		WithBaseURL("https://example.invalid"),
+		WithFlushInterval(time.Hour),
+		WithHTTPClient(httpc),
+	)
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	ctx := context.Background()
+	tr, _ := c.NewTrace(ctx, "t")
+	tr.End(ctx)
+	// Must not hang; send() retries maxRetries times then drops.
+	require.NoError(t, c.Flush(ctx))
+	assert.Equal(t, int64(maxRetries), calls.Load(), "transport errors must be retried maxRetries times")
+}
+
+// errorTransport satisfies http.RoundTripper and always returns a non-nil error.
+type errorTransport struct{ calls *atomic.Int64 }
+
+func (e *errorTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	e.calls.Add(1)
+	return nil, fmt.Errorf("simulated network failure")
+}
+
+func TestSubmitFeedback401ReturnsError(t *testing.T) {
+	httpc := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) *http.Response {
+			return &http.Response{
+				StatusCode: 401,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"error":"unauthorized"}`))),
+				Header:     make(http.Header),
+			}
+		}),
+	}
+	c := NewClient("tl_invalid", WithBaseURL("https://example.invalid"), WithHTTPClient(httpc))
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	err := c.SubmitFeedback(context.Background(), "trace-1", FeedbackData{Label: "bad"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestIsDryRunValues(t *testing.T) {
+	tests := []struct {
+		envVal string
+		want   bool
+	}{
+		{"true", true},
+		{"1", true},
+		{"yes", true},
+		{"TRUE", true},
+		{"YES", true},
+		{"false", false},
+		{"0", false},
+		{"", false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.envVal, func(t *testing.T) {
+			t.Setenv("TRULAYER_DRY_RUN", tc.envVal)
+			got := isDryRun()
+			assert.Equal(t, tc.want, got, "TRULAYER_DRY_RUN=%q", tc.envVal)
+		})
+	}
+}
+
+func TestNewIDUniqueness(t *testing.T) {
+	const n = 100
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		id := newID()
+		require.NotEmpty(t, id)
+		require.Len(t, id, 36)
+		_, dup := seen[id]
+		require.False(t, dup, "duplicate ID generated: %s", id)
+		seen[id] = struct{}{}
+	}
+}
+
+func TestShutdownOnceDoIsIdempotent(t *testing.T) {
+	// Calling Shutdown twice must be safe — once.Do ensures the second call
+	// is a no-op regardless of whether the first call succeeded.
+	c, _, _, _ := captureClient(t, 201)
+	require.NoError(t, c.Shutdown(context.Background()))
+	// Second call: goroutine is already stopped; must return nil, not block.
+	require.NoError(t, c.Shutdown(context.Background()))
+}
+
+func TestFlushCancelledContextDoesNotBlock(t *testing.T) {
+	// Flush with a cancelled context must return promptly (within 1 second).
+	// It may return context.Canceled or nil — either is acceptable; blocking
+	// is not.
+	c, _, _, _ := captureClient(t, 201)
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- c.Flush(ctx) }()
+
+	select {
+	case err := <-done:
+		// nil or context.Canceled are both fine
+		if err != nil {
+			assert.ErrorIs(t, err, context.Canceled, "only acceptable non-nil error is context.Canceled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Flush with cancelled context blocked for >1s")
+	}
+}
+
+func TestTraceIDNonEmpty(t *testing.T) {
+	c := NewClient("")
+	defer func() { _ = c.Shutdown(context.Background()) }()
+	tr, _ := c.NewTrace(context.Background(), "op")
+	assert.NotEmpty(t, tr.ID(), "trace ID must not be empty")
+	assert.Len(t, tr.ID(), 36, "trace ID must be a UUID string")
 }

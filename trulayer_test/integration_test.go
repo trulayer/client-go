@@ -139,3 +139,57 @@ func TestIntegration_ShutdownWaitsForInflight(t *testing.T) {
 	defer rec.mu.Unlock()
 	assert.NotEmpty(t, rec.ingest, "shutdown must flush remaining traces")
 }
+
+// TestIntegration_IngestAuthorizationHeader verifies the Bearer token is set
+// on every POST to /v1/ingest/batch. This was not asserted in the original
+// round-trip test and is the kind of omission that lets a renamed header slip
+// past the unit layer (TRU-457 audit finding).
+func TestIntegration_IngestAuthorizationHeader(t *testing.T) {
+	var capturedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/ingest/batch" {
+			capturedAuth = r.Header.Get("Authorization")
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"ingested":1,"ids":["x"]}`))
+		} else {
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := trulayer.NewClient("tl_secret",
+		trulayer.WithBaseURL(srv.URL),
+		trulayer.WithFlushInterval(50*time.Millisecond),
+	)
+	t.Cleanup(func() { _ = c.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	tr, _ := c.NewTrace(ctx, "auth-check")
+	tr.End(ctx)
+	require.NoError(t, c.Flush(ctx))
+
+	assert.Equal(t, "Bearer tl_secret", capturedAuth, "ingest request must carry Bearer token")
+}
+
+// TestIntegration_401DropsSilently verifies that a 401 from the server causes
+// the batch to be dropped (non-retryable 4xx) and Flush returns nil — the SDK
+// must not propagate server errors to the caller's goroutine.
+func TestIntegration_401DropsSilently(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := trulayer.NewClient("tl_bad_key",
+		trulayer.WithBaseURL(srv.URL),
+		trulayer.WithFlushInterval(time.Hour),
+	)
+	t.Cleanup(func() { _ = c.Shutdown(context.Background()) })
+
+	ctx := context.Background()
+	tr, _ := c.NewTrace(ctx, "t")
+	tr.End(ctx)
+	// Flush must succeed from the caller's perspective — the SDK drops and logs.
+	require.NoError(t, c.Flush(ctx))
+}
