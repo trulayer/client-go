@@ -404,7 +404,7 @@ func TestPeriodicTimerFlush(t *testing.T) {
 	}
 	c := NewClient("tl_test",
 		WithBaseURL("https://example.invalid"),
-		WithBatchSize(1000),                  // never size-flush
+		WithBatchSize(1000),                    // never size-flush
 		WithFlushInterval(20*time.Millisecond), // tick fast
 		WithHTTPClient(httpc),
 	)
