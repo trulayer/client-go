@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# pre-push: runs on every `git push`. Blocks the push on any failure.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+fail() { echo "❌ $*" >&2; exit 1; }
+step() { echo "▶ $*"; }
+
+step "client-go: vet"
+go vet ./... || fail "go vet failed"
+
+step "client-go: tests"
+go test -race ./... || fail "tests failed"
+
+step "client-go: lint"
+golangci-lint run || fail "lint failed"
+
+step "client-go: build"
+go build ./... || fail "build failed"
+
+echo "✅ pre-push checks passed"
