@@ -22,6 +22,7 @@ package trulayer
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -64,7 +65,7 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 	}
 	cfg.baseURL = strings.TrimRight(cfg.baseURL, "/")
 
-	dryRun := apiKey == "" || isDryRun()
+	dryRun := isDryRun()
 
 	c := &Client{
 		apiKey:  apiKey,
@@ -73,6 +74,9 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 		dryRun:  dryRun,
 	}
 	c.batch = newBatchSender(apiKey, cfg.baseURL, cfg.batchSize, cfg.flushInterval, cfg.httpClient, dryRun)
+	if apiKey == "" && !dryRun {
+		log.Printf("trulayer: API key is empty and TRULAYER_DRY_RUN is not set — no traces will be sent. Set TRULAYER_API_KEY or TRULAYER_DRY_RUN=true to silence this warning.")
+	}
 	return c
 }
 
