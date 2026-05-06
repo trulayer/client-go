@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -220,7 +221,52 @@ func TestDryRunSkipsHTTP(t *testing.T) {
 	assert.Equal(t, int64(0), calls.Load(), "dry-run must not hit HTTP")
 }
 
-func TestEmptyAPIKeyImpliesDryRun(t *testing.T) {
+func TestNewClientEmptyKeyWarning(t *testing.T) {
+	// Ensure TRULAYER_DRY_RUN is not set so the warning path fires.
+	t.Setenv("TRULAYER_DRY_RUN", "")
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prev)
+		log.SetFlags(prevFlags)
+	}()
+
+	c := NewClient("", WithBaseURL("https://example.invalid"))
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	out := buf.String()
+	assert.Contains(t, out, "API key is empty")
+	assert.Contains(t, out, "TRULAYER_DRY_RUN")
+}
+
+func TestNewClientEmptyKeyDryRunNoWarning(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prev)
+		log.SetFlags(prevFlags)
+	}()
+
+	c := NewClient("", WithBaseURL("https://example.invalid"))
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	assert.NotContains(t, buf.String(), "API key is empty",
+		"no warning should be emitted when TRULAYER_DRY_RUN is set")
+}
+
+func TestEmptyAPIKeyDoesNotImplyDryRun(t *testing.T) {
+	// With an empty API key and TRULAYER_DRY_RUN unset, the client must NOT be
+	// silently dry-run — it should attempt to send (and produce a startup warning).
+	t.Setenv("TRULAYER_DRY_RUN", "")
 	var calls atomic.Int64
 	httpc := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) *http.Response {
@@ -238,7 +284,8 @@ func TestEmptyAPIKeyImpliesDryRun(t *testing.T) {
 	tr, _ := c.NewTrace(ctx, "t")
 	tr.End(ctx)
 	require.NoError(t, c.Flush(ctx))
-	assert.Equal(t, int64(0), calls.Load(), "empty api key must imply dry-run")
+	assert.GreaterOrEqual(t, calls.Load(), int64(1),
+		"empty api key alone must not imply dry-run; HTTP must be attempted")
 }
 
 func TestShutdownDrainsQueue(t *testing.T) {
@@ -313,6 +360,7 @@ func TestOptionsValidation(t *testing.T) {
 }
 
 func TestTraceOptions(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("", WithBaseURL("https://example.invalid"))
 	defer func() { _ = c.Shutdown(context.Background()) }()
 
@@ -327,6 +375,7 @@ func TestTraceOptions(t *testing.T) {
 }
 
 func TestSpanOptionsAndSetters(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("", WithBaseURL("https://example.invalid"))
 	defer func() { _ = c.Shutdown(context.Background()) }()
 
@@ -361,6 +410,7 @@ func TestSpanOptionsAndSetters(t *testing.T) {
 }
 
 func TestSpanFromContext(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("")
 	defer func() { _ = c.Shutdown(context.Background()) }()
 
@@ -371,6 +421,7 @@ func TestSpanFromContext(t *testing.T) {
 }
 
 func TestSpanSettersComplete(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("")
 	defer func() { _ = c.Shutdown(context.Background()) }()
 
@@ -443,6 +494,7 @@ func TestEnqueueAfterShutdownIsSafe(t *testing.T) {
 }
 
 func TestEndIsIdempotent(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("")
 	defer func() { _ = c.Shutdown(context.Background()) }()
 
@@ -635,6 +687,7 @@ func TestFlushCancelledContextDoesNotBlock(t *testing.T) {
 }
 
 func TestTraceIDNonEmpty(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("")
 	defer func() { _ = c.Shutdown(context.Background()) }()
 	tr, _ := c.NewTrace(context.Background(), "op")
