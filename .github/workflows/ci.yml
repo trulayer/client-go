@@ -1,24 +1,74 @@
-name: ci
-on: [push, pull_request]
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ci:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - run: go vet ./...
-      - run: go test -race -coverprofile=coverage.out ./...
-      # CODECOV_TOKEN must be set in repo Settings → Secrets and variables → Actions
-      - uses: codecov/codecov-action@v5
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: go test
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
         with:
           files: coverage.out
-          flags: unittests
+          flags: client-go
           fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      - uses: golangci/golangci-lint-action@v6
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          version: latest
+          go-version: '1.22'
+          cache: true
+      - name: go build
+        run: go build ./...
+
+  ci:
+    name: ci
+    if: always()
+    runs-on: ubuntu-latest
+    needs: [lint, test, build]
+    steps:
+      - name: Aggregate result
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more required jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All required checks passed"
