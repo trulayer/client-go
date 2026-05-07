@@ -52,6 +52,77 @@ func main() {
 }
 ```
 
+## Auto-instrumentation
+
+Use an optional sub-module to wrap your OpenAI or Anthropic client. Every API call automatically records a TruLayer span — no manual `NewSpan` required.
+
+### OpenAI
+
+```bash
+go get github.com/trulayer/client-go/instruments/openai
+```
+
+```go
+import (
+    "github.com/openai/openai-go"
+    "github.com/openai/openai-go/option"
+    tlopenai "github.com/trulayer/client-go/instruments/openai"
+    "github.com/trulayer/client-go/trulayer"
+)
+
+tl := trulayer.NewClient(os.Getenv("TRULAYER_API_KEY"))
+defer tl.Shutdown(ctx)
+
+oai := openai.NewClient(option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
+client := tlopenai.InstrumentOpenAI(oai, tl)
+
+trace, ctx := tl.NewTrace(ctx, "answer-question")
+defer trace.End(ctx)
+
+// Every call below records a span automatically.
+resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Model:    openai.ChatModelGPT4oMini,
+    Messages: []openai.ChatCompletionMessageParamUnion{
+        openai.UserMessage("Why is the sky blue?"),
+    },
+})
+```
+
+### Anthropic
+
+```bash
+go get github.com/trulayer/client-go/instruments/anthropic
+```
+
+```go
+import (
+    "github.com/anthropics/anthropic-sdk-go"
+    "github.com/anthropics/anthropic-sdk-go/option"
+    tlanthropic "github.com/trulayer/client-go/instruments/anthropic"
+    "github.com/trulayer/client-go/trulayer"
+)
+
+tl := trulayer.NewClient(os.Getenv("TRULAYER_API_KEY"))
+defer tl.Shutdown(ctx)
+
+ac := anthropic.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
+client := tlanthropic.InstrumentAnthropic(&ac, tl)
+
+trace, ctx := tl.NewTrace(ctx, "answer-question")
+defer trace.End(ctx)
+
+// Every call below records a span automatically.
+resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+    Model:     anthropic.ModelClaudeHaiku4_5,
+    MaxTokens: 256,
+    Messages:  []anthropic.MessageParam{
+        anthropic.NewUserMessage(anthropic.NewTextBlock("Why is the sky blue?")),
+    },
+})
+```
+
+Each instrument sub-module is independent — only install the provider you use. The core `github.com/trulayer/client-go` module retains zero external dependencies.
+
 ## Manual Instrumentation
 
 ```go
