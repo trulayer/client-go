@@ -60,18 +60,46 @@ go mod tidy                 # Clean up go.mod / go.sum
 ```text
 trulayer/
   client.go         → TruLayerClient (init, flush, shutdown)
-  trace.go          → Trace and Span — start/end, context propagation
+  trace.go          → Trace, TraceFromContext, Spans accessor
+  span.go           → Span, SpanFromContext
   batch.go          → async batch sender (channel + flush goroutine)
   model.go          → TraceData, SpanData, SpanType, etc.
-  instruments/
-    openai.go       → OpenAI Go client auto-instrumentation
-    anthropic.go    → Anthropic Go SDK auto-instrumentation
   options.go        → ClientOption functional options
   errors.go         → SDK error types (never propagated to caller)
 go.mod
 go.sum
+
+instruments/        → optional auto-instrumentation, one Go sub-module per provider
+  openai/           → github.com/trulayer/client-go/instruments/openai
+    go.mod          →   depends on github.com/openai/openai-go
+    openai.go       →   InstrumentOpenAI(*openai.Client, *trulayer.Client) wrapper
+  anthropic/        → github.com/trulayer/client-go/instruments/anthropic
+    go.mod          →   depends on github.com/anthropics/anthropic-sdk-go
+    anthropic.go    →   InstrumentAnthropic(*anthropic.Client, *trulayer.Client) wrapper
+
 examples/           → runnable snippets (kept minimal; full examples in demo-go)
 ```
+
+### Why instruments are separate Go modules
+
+The core `github.com/trulayer/client-go` module has zero external runtime
+dependencies. Each provider instrument lives in its own sub-module so
+users only pull in the provider SDKs they actually use. Import each
+instrument under its dedicated path:
+
+```go
+import (
+    "github.com/trulayer/client-go/trulayer"
+    tlopenai    "github.com/trulayer/client-go/instruments/openai"
+    tlanthropic "github.com/trulayer/client-go/instruments/anthropic"
+)
+```
+
+When testing locally inside this repo, each instrument's `go.mod` has a
+`replace github.com/trulayer/client-go => ../..` directive so changes to
+the core SDK are picked up without publishing. The replace directive is
+fine to keep on `main` — Go module consumers fetch tagged versions, which
+do not honour local replaces.
 
 ## Coding Conventions
 
