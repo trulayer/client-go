@@ -6,6 +6,19 @@ import (
 	"time"
 )
 
+// traceCtxKey is the context key under which the active *Trace is stored.
+type traceCtxKey struct{}
+
+// TraceFromContext returns the active trace carried in ctx, or nil if there
+// is none. Instruments and helper code use it to attach a span to whichever
+// trace the caller already started.
+func TraceFromContext(ctx context.Context) *Trace {
+	if v, ok := ctx.Value(traceCtxKey{}).(*Trace); ok {
+		return v
+	}
+	return nil
+}
+
 // Trace is a unit of work that groups one or more spans. Create via
 // Client.NewTrace and call End to flush.
 type Trace struct {
@@ -104,6 +117,19 @@ func (t *Trace) NewSpan(ctx context.Context, name string, spanType SpanType, opt
 		},
 	}
 	return s, context.WithValue(ctx, spanCtxKey{}, s)
+}
+
+// Spans returns a snapshot of the spans recorded on this trace so far. The
+// returned slice is a copy — mutations do not affect the trace.
+//
+// Spans is primarily intended for testing instruments; production code does
+// not need to inspect individual spans.
+func (t *Trace) Spans() []SpanData {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]SpanData, len(t.data.Spans))
+	copy(out, t.data.Spans)
+	return out
 }
 
 // End finalises the trace and queues it to the background batch sender.

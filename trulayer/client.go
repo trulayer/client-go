@@ -99,7 +99,7 @@ func (c *Client) NewTrace(ctx context.Context, name string, opts ...TraceOption)
 			Spans:      []SpanData{},
 		},
 	}
-	return t, ctx
+	return t, context.WithValue(ctx, traceCtxKey{}, t)
 }
 
 // Flush blocks until all enqueued traces have been attempted. The context

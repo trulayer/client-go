@@ -420,6 +420,23 @@ func TestSpanFromContext(t *testing.T) {
 	assert.Equal(t, span, SpanFromContext(ctx))
 }
 
+func TestTraceFromContext(t *testing.T) {
+	t.Setenv("TRULAYER_DRY_RUN", "true")
+	c := NewClient("")
+	defer func() { _ = c.Shutdown(context.Background()) }()
+
+	// no trace in context -> nil
+	assert.Nil(t, TraceFromContext(context.Background()))
+
+	// NewTrace stores the trace in the returned context.
+	tr, ctx := c.NewTrace(context.Background(), "op")
+	assert.Equal(t, tr, TraceFromContext(ctx))
+
+	// Trace is also propagated through child span contexts.
+	_, spanCtx := tr.NewSpan(ctx, "s", SpanTypeOther)
+	assert.Equal(t, tr, TraceFromContext(spanCtx))
+}
+
 func TestSpanSettersComplete(t *testing.T) {
 	t.Setenv("TRULAYER_DRY_RUN", "true")
 	c := NewClient("")
