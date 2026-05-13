@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 3m
   tests: true
@@ -9,19 +11,20 @@ linters:
     - govet
     - ineffassign
     - staticcheck
-    - unused
+    - misspell
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+            - "disableStutteringCheck"
+
+formatters:
+  enable:
     - gofmt
     - goimports
-    - revive
-    - misspell
-
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-          - "disableStutteringCheck"
 
 issues:
   exclude-dirs:
