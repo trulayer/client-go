@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/openai/openai-go v1.12.0
 	github.com/stretchr/testify v1.9.0
-	github.com/trulayer/client-go v0.0.0
+	github.com/trulayer/client-go v0.1.0
 )
 
 require (
