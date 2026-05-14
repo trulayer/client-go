@@ -101,10 +101,16 @@ func (t *Trace) NewSpan(ctx context.Context, name string, spanType SpanType, opt
 	if p, ok := ctx.Value(spanCtxKey{}).(*Span); ok && p != nil {
 		parentID = p.data.ID
 	}
-	now := time.Now().UTC()
+	// Capture the start instant once so the wall-clock StartTime, the
+	// monotonic latency anchor (s.start), and the eventual EndTime all
+	// refer to the same moment the upstream operation begins. The latency
+	// waterfall positions bars by StartTime, so it must be the wall-clock
+	// time right before the operation — which is exactly when callers
+	// invoke NewSpan.
+	start := time.Now()
 	s := &Span{
 		trace: t,
-		start: time.Now(),
+		start: start,
 		data: SpanData{
 			ID:           newID(),
 			ParentSpanID: parentID,
@@ -113,7 +119,7 @@ func (t *Trace) NewSpan(ctx context.Context, name string, spanType SpanType, opt
 			Input:        cfg.input,
 			Model:        cfg.model,
 			Metadata:     cfg.metadata,
-			StartTime:    now,
+			StartTime:    start.UTC(),
 		},
 	}
 	return s, context.WithValue(ctx, spanCtxKey{}, s)
