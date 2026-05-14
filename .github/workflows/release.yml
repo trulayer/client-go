@@ -24,7 +24,6 @@ jobs:
           # so the next step can create and push it. For tag-push events,
           # github.ref already points to the tag.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
@@ -54,34 +53,15 @@ jobs:
       - name: Ping Go proxy
         run: GOPROXY=proxy.golang.org go list -m ${MODULE}@${VERSION}
 
-      # When a core module version is released, bump the instrument sub-modules
-      # to reference the new core version, commit to main, and push instrument
-      # tags so the Go proxy indexes them at the same version.
-      - name: Bump instruments and push instrument tags (core release only)
+      # When a core module version is released, push matching instrument tags
+      # so the Go proxy indexes them at the same version. go.mod bumps for the
+      # instrument sub-modules require a PR (main is branch-protected) and are
+      # done manually when the minimum core API version needs to change.
+      - name: Push instrument tags (core release only)
         if: env.IS_CORE == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout main
-          git pull origin main
-
-          # Bump the core dependency version in each instrument go.mod
-          sed -i "s|github\.com/trulayer/client-go v[0-9][^ ]*|github.com/trulayer/client-go ${VERSION}|" \
-            instruments/openai/go.mod instruments/anthropic/go.mod
-
-          # Refresh go.sum (replace directive picks up local core module)
-          (cd instruments/openai && go mod tidy)
-          (cd instruments/anthropic && go mod tidy)
-
-          # Commit if anything changed
-          git add instruments/openai/go.mod instruments/openai/go.sum \
-                  instruments/anthropic/go.mod instruments/anthropic/go.sum
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump instrument sub-modules to core ${VERSION}"
-            git push origin main
-          fi
-
-          # Tag and push instrument sub-modules at the same version
           git tag "instruments/openai/${VERSION}"
           git tag "instruments/anthropic/${VERSION}"
           git push origin "instruments/openai/${VERSION}" "instruments/anthropic/${VERSION}"
