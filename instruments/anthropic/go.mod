@@ -5,7 +5,7 @@ go 1.23.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.41.0
 	github.com/stretchr/testify v1.9.0
-	github.com/trulayer/client-go v0.1.0
+	github.com/trulayer/client-go v0.2.0
 )
 
 require (
