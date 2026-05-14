@@ -5,18 +5,28 @@ on:
       - 'v*.*.*'
       - 'instruments/anthropic/v*.*.*'
       - 'instruments/openai/v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.2.0, instruments/openai/v0.2.0)'
+        required: true
+        type: string
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch, check out the tagged commit if it exists;
+          # fall back to HEAD (so the workflow can create the tag first if needed).
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
       - name: Determine module and version
         run: |
-          TAG=${GITHUB_REF_NAME}
+          TAG=${{ github.event.inputs.tag || github.ref_name }}
           if [[ $TAG == instruments/anthropic/* ]]; then
             echo "MODULE=github.com/trulayer/client-go/instruments/anthropic" >> $GITHUB_ENV
             echo "VERSION=${TAG#instruments/anthropic/}" >> $GITHUB_ENV
@@ -27,5 +37,12 @@ jobs:
             echo "MODULE=github.com/trulayer/client-go" >> $GITHUB_ENV
             echo "VERSION=$TAG" >> $GITHUB_ENV
           fi
+      - name: Create and push tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ github.event.inputs.tag }}"
+          git push origin "${{ github.event.inputs.tag }}"
       - name: Ping Go proxy
         run: GOPROXY=proxy.golang.org go list -m ${MODULE}@${VERSION}
