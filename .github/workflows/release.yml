@@ -18,9 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # For workflow_dispatch, check out the tagged commit if it exists;
-          # fall back to HEAD (so the workflow can create the tag first if needed).
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          # For workflow_dispatch the tag doesn't exist yet — check out main
+          # so the next step can create and push it. For tag-push events,
+          # github.ref already points to the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
